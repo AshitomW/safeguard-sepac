@@ -1,0 +1,51 @@
+[package]
+name = "sepac"
+version = "0.1.0"
+edition = "2024"
+description = "Safeguard — package-manager-agnostic  attack prevention"
+license = "MIT"
+
+[dependencies]
+# Serialisation — required for config, types, and audit output
+serde = { version = "1", features = ["derive"] }
+
+# TOML config parsing — syscall allowlists, weights, thresholds are all data
+toml = "0.8"
+
+# Ergonomic error enums with structured context
+thiserror = "2"
+
+# Async runtime — I/O-bound registry fetches and sandbox orchestration
+tokio = { version = "1", features = ["full"] }
+
+# Async trait support — stable async-in-trait covers simple cases,
+# but we need dyn-dispatch (Box<dyn PackageSource>) which requires async-trait
+async-trait = "0.1"
+
+# Timestamps for audit events and velocity calculations
+chrono = { version = "0.4", features = ["serde"] }
+
+# JSON serialisation for audit log and --json output
+serde_json = "1"
+
+# HMAC signing for append-only audit log entries
+hmac = "0.12"
+sha2 = "0.10"
+
+# CLI argument parsing — thin shim with subcommands
+clap = { version = "4", features = ["derive"] }
+
+# HTTP client for registry API calls (npm, PyPI, etc.)
+# rustls-tls avoids linking OpenSSL; json enables .json() on responses
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Temp directory management for extracted package archives
+tempfile = "3"
+
+# Archive extraction (tar + gzip) for npm tarballs
+flate2 = "1"
+tar = "0.4"
+
+[dev-dependencies]
+# Test assertions
+tokio-test = "0.4"

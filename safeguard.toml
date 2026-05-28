@@ -1,0 +1,48 @@
+# Safeguard Configuration
+# All thresholds, weights, and allowlists are data — not code.
+
+trust_mode = "Balanced"
+
+[scoring]
+max_score = 20
+
+[scoring.weights]
+runtime-syscall = 4.0
+post-install-added = 5.0
+new-maintainer = 3.0
+velocity-outlier = 2.0
+binary-blob = 3.0
+obfuscated-code = 4.0
+dependency-added = 1.0
+provenance-missing = 2.0
+
+[scoring.thresholds]
+allow_max = 4
+warn_max = 9
+block_max = 14
+
+[trust_modes.paranoid]
+force_allowed = false
+warn_threshold_override = 0
+block_threshold_override = 0
+
+[trust_modes.balanced]
+force_allowed = true
+
+[trust_modes.yolo]
+force_allowed = true
+warn_threshold_override = 14
+block_threshold_override = 14
+
+[sandbox]
+network_namespace = true
+mount_namespace = true
+user_namespace = true
+seccomp_enabled = true
+syscall_allowlist_path = "/etc/safeguard/syscall_allowlist.toml"
+timeout_secs = 30
+memory_limit_bytes = 268435456  # 256 MiB
+
+[audit]
+log_path = "/var/log/safeguard/audit.jsonl"
+hmac_key_path = "/etc/safeguard/hmac.key"
