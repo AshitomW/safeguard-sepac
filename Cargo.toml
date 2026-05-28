@@ -3,7 +3,7 @@ name = "sepac"
 version = "0.1.0"
 edition = "2024"
 description = "Safeguard — package-manager-agnostic  attack prevention"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 # Serialisation — required for config, types, and audit output
