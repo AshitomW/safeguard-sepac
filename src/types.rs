@@ -263,6 +263,82 @@ pub enum Signal {
         /// What was expected (e.g. "Sigstore attestation").
         expected: String,
     },
+
+    /// Typosquatting detected against a popular package.
+    Typosquat {
+        /// Popular package being spoofed.
+        target_package: String,
+        /// Edit distance.
+        distance: usize,
+        /// Confidence (0.0–1.0).
+        confidence: f64,
+    },
+
+    /// Dependency confusion indicator (version inflation, internal scope collision).
+    DependencyConfusion {
+        /// Reason for risk flag.
+        reason: String,
+        /// Whether extreme version inflation occurred.
+        version_jump: bool,
+        /// Whether internal-looking org scope pattern was matched.
+        internal_pattern: bool,
+    },
+
+    /// Exposed API key or secret token detected in source or install scripts.
+    SecretExposed {
+        /// File path containing secret.
+        file: PathBuf,
+        /// Secret type (e.g. AWS_SECRET_ACCESS_KEY, GITHUB_TOKEN).
+        secret_type: String,
+        /// Line number in file.
+        line: usize,
+    },
+
+    /// Top-level payload execution triggered at import/require time.
+    ImportTimeExec {
+        /// File path containing top-level execution logic.
+        file: PathBuf,
+        /// Target API invoked.
+        target_api: String,
+        /// Description of execution behavior.
+        description: String,
+    },
+
+    /// CI environment reconnaissance or bypass attempt detected.
+    CIAttack {
+        /// File path containing CI attack logic.
+        file: PathBuf,
+        /// Specific flag or env variable targeted (e.g. CI=false, RECON_ONLY).
+        flag_found: String,
+    },
+
+    /// Phantom node-gyp or binding.gyp shell injection payload detected.
+    PhantomGyp {
+        /// File path (e.g. binding.gyp).
+        file: PathBuf,
+        /// Description of injection pattern found.
+        pattern: String,
+    },
+
+    /// Community or custom YARA threat signature match.
+    YaraRuleMatch {
+        /// Name of matching YARA rule.
+        rule_name: String,
+        /// Matching file path.
+        file: PathBuf,
+        /// String matches or identifiers.
+        matches: Vec<String>,
+    },
+
+    /// Known CVE / vulnerability from OSV database.
+    KnownVulnerability {
+        /// Associated CVE or OSV IDs.
+        cve_ids: Vec<String>,
+        /// Vulnerability summary.
+        summary: String,
+        /// Severity rating (e.g. HIGH, CRITICAL).
+        severity: String,
+    },
 }
 
 impl Signal {
@@ -277,6 +353,14 @@ impl Signal {
             Self::ObfuscatedCode { .. } => "obfuscated-code",
             Self::DependencyAdded { .. } => "dependency-added",
             Self::ProvenanceMissing { .. } => "provenance-missing",
+            Self::Typosquat { .. } => "typosquat",
+            Self::DependencyConfusion { .. } => "dependency-confusion",
+            Self::SecretExposed { .. } => "secret-exposed",
+            Self::ImportTimeExec { .. } => "import-time-exec",
+            Self::CIAttack { .. } => "ci-attack",
+            Self::PhantomGyp { .. } => "phantom-gyp",
+            Self::YaraRuleMatch { .. } => "yara-match",
+            Self::KnownVulnerability { .. } => "known-vulnerability",
         }
     }
 
@@ -334,6 +418,71 @@ impl Signal {
             }
             Self::ProvenanceMissing { expected } => {
                 format!("provenance missing — expected: {expected}")
+            }
+            Self::Typosquat {
+                target_package,
+                distance,
+                confidence,
+            } => {
+                format!(
+                    "possible typosquat of '{target_package}' (distance: {distance}, confidence: {confidence:.2})"
+                )
+            }
+            Self::DependencyConfusion {
+                reason,
+                version_jump,
+                internal_pattern,
+            } => {
+                format!(
+                    "dependency confusion risk ({reason}) — version jump: {version_jump}, internal scope: {internal_pattern}"
+                )
+            }
+            Self::SecretExposed {
+                file,
+                secret_type,
+                line,
+            } => {
+                format!("secret exposed in {}:{line} — {secret_type}", file.display())
+            }
+            Self::ImportTimeExec {
+                file,
+                target_api,
+                description,
+            } => {
+                format!(
+                    "import-time execution payload in {} ({target_api}) — {description}",
+                    file.display()
+                )
+            }
+            Self::CIAttack { file, flag_found } => {
+                format!(
+                    "CI environment reconnaissance/bypass in {} — flag '{flag_found}'",
+                    file.display()
+                )
+            }
+            Self::PhantomGyp { file, pattern } => {
+                format!("phantom gyp abuse in {} — {pattern}", file.display())
+            }
+            Self::YaraRuleMatch {
+                rule_name,
+                file,
+                matches,
+            } => {
+                format!(
+                    "YARA rule '{rule_name}' matched {} ({})",
+                    file.display(),
+                    matches.join(", ")
+                )
+            }
+            Self::KnownVulnerability {
+                cve_ids,
+                summary,
+                severity,
+            } => {
+                format!(
+                    "known vulnerability [{severity}] ({}) — {summary}",
+                    cve_ids.join(", ")
+                )
             }
         }
     }

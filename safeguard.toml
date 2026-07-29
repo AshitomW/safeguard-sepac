@@ -15,6 +15,14 @@ binary-blob = 3.0
 obfuscated-code = 4.0
 dependency-added = 1.0
 provenance-missing = 2.0
+typosquat = 6.0
+dependency-confusion = 8.0
+secret-exposed = 7.0
+import-time-exec = 6.0
+ci-attack = 7.0
+phantom-gyp = 8.0
+yara-match = 7.0
+known-vulnerability = 5.0
 
 [scoring.thresholds]
 allow_max = 4

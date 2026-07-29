@@ -125,6 +125,14 @@ impl ScoringConfig {
         w.insert("obfuscated-code".into(), 4.0);
         w.insert("dependency-added".into(), 1.0);
         w.insert("provenance-missing".into(), 2.0);
+        w.insert("typosquat".into(), 6.0);
+        w.insert("dependency-confusion".into(), 8.0);
+        w.insert("secret-exposed".into(), 7.0);
+        w.insert("import-time-exec".into(), 6.0);
+        w.insert("ci-attack".into(), 7.0);
+        w.insert("phantom-gyp".into(), 8.0);
+        w.insert("yara-match".into(), 7.0);
+        w.insert("known-vulnerability".into(), 5.0);
         w
     }
 

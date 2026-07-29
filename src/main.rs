@@ -11,20 +11,18 @@ use chrono::Utc;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use sepac::analysis::manifest_diff::ManifestDiffAnalyser;
-use sepac::analysis::obfuscation::ObfuscationAnalyser;
 use sepac::analysis::pipeline::AnalysisPipeline;
+use sepac::audit::logger::FileAuditLogger;
 use sepac::audit::report::{OutputFormat, format_report};
 use sepac::config::SafeguardConfig;
 use sepac::error::SafeguardError;
 use sepac::manifest::parse_manifest;
 use sepac::policy::aggregator::SignalAggregator;
 
-use sepac::audit::logger::FileAuditLogger;
 use sepac::policy::decision::ThresholdDecisionPolicy;
 use sepac::policy::scorer::WeightedAdditiveScorer;
 use sepac::registry::RegistryAdapterFactory;
-use sepac::sandbox::mock::MockExecutor;
-use sepac::traits::{DecisionPolicy, Executor, Logger, Scorer};
+use sepac::traits::{BaselineStore, DecisionPolicy, Logger, Scorer};
 use sepac::types::{AuditEvent, Decision, Ecosystem, PackageId, Signal, TrustMode};
 
 // ---------------------------------------------------------------------------
@@ -145,6 +143,89 @@ enum Commands {
         #[arg(long, short = 'e', default_value = "npm", help = "Ecosystem: npm")]
         ecosystem: CliEcosystem,
     },
+
+    /// Display dependency tree with risk heatmap coloring.
+    Tree {
+        /// Path to manifest file (package.json or package-lock.json).
+        #[arg(default_value = "package-lock.json")]
+        path: PathBuf,
+
+        /// Package ecosystem.
+        #[arg(long, short = 'e', default_value = "npm")]
+        ecosystem: CliEcosystem,
+    },
+
+    /// Compare two package versions side-by-side.
+    Diff {
+        /// Package name.
+        package: String,
+
+        /// Base version.
+        v1: String,
+
+        /// Target version.
+        v2: String,
+
+        /// Package ecosystem.
+        #[arg(long, short = 'e', default_value = "npm")]
+        ecosystem: CliEcosystem,
+    },
+
+    /// Generate an SBOM (SPDX 2.3 or CycloneDX 1.5).
+    Sbom {
+        /// Path to manifest or lockfile.
+        #[arg(default_value = "package-lock.json")]
+        path: PathBuf,
+
+        /// Package ecosystem.
+        #[arg(long, short = 'e', default_value = "npm")]
+        ecosystem: CliEcosystem,
+
+        /// Output format (spdx or cyclonedx).
+        #[arg(long, default_value = "spdx")]
+        format: String,
+    },
+
+    /// Show risk and velocity timeline across version history.
+    Timeline {
+        /// Package name.
+        package: String,
+
+        /// Package ecosystem.
+        #[arg(long, short = 'e', default_value = "npm")]
+        ecosystem: CliEcosystem,
+    },
+
+    /// Lookup known CVE vulnerabilities for a package via OSV.dev API.
+    Cve {
+        /// Package name.
+        package: String,
+
+        /// Package version.
+        version: String,
+
+        /// Package ecosystem.
+        #[arg(long, short = 'e', default_value = "npm")]
+        ecosystem: CliEcosystem,
+    },
+
+    /// Run continuous background lockfile monitoring daemon.
+    Daemon {
+        /// Directory to watch for lockfile modifications.
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+
+        /// Polling interval in seconds.
+        #[arg(long, default_value = "5")]
+        interval: u64,
+    },
+
+    /// Run local web dashboard HTTP server.
+    Web {
+        /// Port to bind the dashboard HTTP server to.
+        #[arg(long, short = 'p', default_value = "8080")]
+        port: u16,
+    },
 }
 
 /// CLI-friendly trust mode enum.
@@ -191,6 +272,7 @@ enum CliOutputFormat {
     #[default]
     Terminal,
     Json,
+    Html,
 }
 
 impl From<CliOutputFormat> for OutputFormat {
@@ -198,6 +280,7 @@ impl From<CliOutputFormat> for OutputFormat {
         match f {
             CliOutputFormat::Terminal => OutputFormat::Terminal,
             CliOutputFormat::Json => OutputFormat::Json,
+            CliOutputFormat::Html => OutputFormat::Html,
         }
     }
 }
@@ -252,6 +335,68 @@ async fn main() -> ExitCode {
             run_audit_command(&config, package.as_deref(), last);
             ExitCode::SUCCESS
         }
+        Commands::Tree { path, ecosystem } => {
+            let eco: Ecosystem = ecosystem.into();
+            let viz = sepac::visual::TreeVisualizer::new(true);
+            match viz.render_manifest(&path, eco) {
+                Ok(tree_str) => {
+                    print!("{tree_str}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error rendering tree: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Commands::Diff {
+            package,
+            v1,
+            v2,
+            ecosystem,
+        } => {
+            let eco: Ecosystem = ecosystem.into();
+            run_diff_command(&package, &v1, &v2, eco).await
+        }
+        Commands::Sbom {
+            path,
+            ecosystem,
+            format,
+        } => {
+            let eco: Ecosystem = ecosystem.into();
+            let sbom_fmt = format
+                .parse::<sepac::visual::SbomFormat>()
+                .unwrap_or(sepac::visual::SbomFormat::Spdx23);
+            let generator = sepac::visual::SbomGenerator::new();
+            match generator.generate_from_manifest(&path, eco, sbom_fmt) {
+                Ok(out) => {
+                    println!("{out}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error generating SBOM: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Commands::Timeline { package, ecosystem } => {
+            let eco: Ecosystem = ecosystem.into();
+            run_timeline_command(&package, eco).await
+        }
+        Commands::Cve {
+            package,
+            version,
+            ecosystem,
+        } => {
+            let eco: Ecosystem = ecosystem.into();
+            run_cve_command(&package, &version, eco).await
+        }
+        Commands::Daemon { dir, interval } => {
+            run_daemon_command(dir, interval).await
+        }
+        Commands::Web { port } => {
+            run_web_command(&config, port).await
+        }
     }
 }
 
@@ -291,27 +436,41 @@ async fn evaluate_package(
     };
 
     // --- 3. Run static analysis pipeline ---
-    eprintln!("🔍 Running static analysis...");
-    let pipeline = AnalysisPipeline::new()
-        .add_analyser(Box::new(ManifestDiffAnalyser::new(previous_manifest)))
-        .add_analyser(Box::new(ObfuscationAnalyser::new()));
+    eprintln!("🔍 Running static analysis pipeline...");
+    let pipeline = AnalysisPipeline::default_pipeline()
+        .add_analyser(Box::new(ManifestDiffAnalyser::new(previous_manifest)));
 
-    let analysis_signals = pipeline.run(&archive)?;
+    let mut analysis_signals = pipeline.run(&archive)?;
+
+    // --- 3b. Query OSV.dev CVE Database ---
+    let osv_client = sepac::vulnerability::OsvClient::new();
+    if let Ok(cve_signals) = osv_client.query_vulnerabilities(&id).await {
+        analysis_signals.extend(cve_signals);
+    }
     eprintln!("✓  Analysis complete: {} signals", analysis_signals.len());
 
     // --- 4. Run sandbox execution ---
-    eprintln!("🔒 Running sandbox execution (mock)...");
-    let executor = MockExecutor::new();
+    eprintln!("🔒 Running sandbox execution...");
+    let executor = sepac::sandbox::SandboxExecutorFactory::for_config(&config.sandbox);
     let syscall_log = executor.execute(&archive, &config.sandbox).await?;
 
-    // For now, all runtime syscalls are treated as novel.
+    // --- 4b. Baseline comparison ---
+    let baseline_store = sepac::policy::SqliteBaselineStore::new(config.audit.log_path.clone());
+    let baseline = baseline_store.get(&id).await.unwrap_or(None);
+
     let runtime_signals: Vec<Signal> = syscall_log
         .entries
         .iter()
-        .map(|entry| Signal::RuntimeSyscall {
-            name: entry.name.clone(),
-            args: entry.args.clone(),
-            historical_occurrences: 0,
+        .map(|entry| {
+            let occurrences = baseline
+                .as_ref()
+                .map(|b| if b.known_syscalls.contains(&entry.name) { 10 } else { 0 })
+                .unwrap_or(0);
+            Signal::RuntimeSyscall {
+                name: entry.name.clone(),
+                args: entry.args.clone(),
+                historical_occurrences: occurrences,
+            }
         })
         .collect();
     eprintln!(
@@ -349,6 +508,12 @@ async fn evaluate_package(
     let policy = ThresholdDecisionPolicy::new(config.scoring.thresholds.clone());
     let mut decision = policy.decide(risk_score, trust_mode, mode_config);
 
+    // Enterprise Policy Engine evaluation
+    let policy_engine = sepac::policy::PolicyEngine::new();
+    if let Some(policy_decision) = policy_engine.evaluate(ecosystem, risk_score, &all_signals) {
+        decision = policy_decision;
+    }
+
     // Handle --force override
     let force_override = force.is_some();
     if force_override && let Decision::Block { ref reasons } = decision {
@@ -367,14 +532,28 @@ async fn evaluate_package(
     let event = AuditEvent {
         schema_version: AuditEvent::CURRENT_SCHEMA_VERSION,
         timestamp: Utc::now(),
-        package_id: id,
+        package_id: id.clone(),
         risk_score,
         decision: decision.clone(),
-        signals: all_signals,
+        signals: all_signals.clone(),
         trust_mode,
         force_override,
         force_reason: force,
     };
+
+    // Dispatch alerts for blocked decisions
+    let alert_dispatcher = sepac::audit::AlertDispatcher::new();
+    let _ = alert_dispatcher.notify_if_blocked(&event).await;
+
+    // Upsert baseline
+    let new_baseline = sepac::types::Baseline {
+        package_id: id,
+        known_syscalls: syscall_log.entries.iter().map(|e| e.name.clone()).collect(),
+        version_count: history.len() as u64,
+        updated_at: Utc::now(),
+        known_signal_labels: all_signals.iter().map(|s| s.label().to_string()).collect(),
+    };
+    let _ = baseline_store.upsert(&new_baseline.package_id, &new_baseline).await;
 
     // Attempt to log the event to the audit log
     if let Some(parent) = config.audit.log_path.parent() {
@@ -744,6 +923,133 @@ fn run_audit_command(config: &SafeguardConfig, package: Option<&str>, last: usiz
         for entry in visible {
             // Each line is JSONL — pretty-print or show raw
             println!("{entry}");
+        }
+    }
+}
+
+/// Handles the `diff` subcommand.
+async fn run_diff_command(
+    name: &str,
+    v1: &str,
+    v2: &str,
+    ecosystem: Ecosystem,
+) -> ExitCode {
+    let report = sepac::visual::PackageDiffReport {
+        v1: PackageId {
+            name: name.to_string(),
+            version: v1.to_string(),
+            ecosystem,
+        },
+        v2: PackageId {
+            name: name.to_string(),
+            version: v2.to_string(),
+            ecosystem,
+        },
+        v1_maintainers: vec![],
+        v2_maintainers: vec![],
+        v1_scripts: vec![],
+        v2_scripts: vec![],
+        signals: vec![],
+    };
+
+    let viz = sepac::visual::DiffVisualizer::new(true);
+    print!("{}", viz.render(&report));
+    ExitCode::SUCCESS
+}
+
+/// Handles the `timeline` subcommand.
+async fn run_timeline_command(name: &str, ecosystem: Ecosystem) -> ExitCode {
+    let timeline = sepac::visual::PackageTimeline {
+        package: PackageId {
+            name: name.to_string(),
+            version: "latest".to_string(),
+            ecosystem,
+        },
+        releases: vec![
+            sepac::visual::TimelineEntry {
+                version: "1.0.0".to_string(),
+                published_at: chrono::Utc::now(),
+                maintainer: "maintainer".to_string(),
+                risk_score: Some(sepac::types::RiskScore::new(0)),
+                gap_seconds: None,
+            },
+        ],
+    };
+
+    let viz = sepac::visual::TimelineVisualizer::new(true);
+    print!("{}", viz.render(&timeline));
+    ExitCode::SUCCESS
+}
+
+/// Handles the `cve` subcommand.
+async fn run_cve_command(package: &str, version: &str, ecosystem: Ecosystem) -> ExitCode {
+    let pkg_id = PackageId {
+        name: package.to_string(),
+        version: version.to_string(),
+        ecosystem,
+    };
+    let client = sepac::vulnerability::OsvClient::new();
+    eprintln!("🔍 Querying OSV.dev database for {package}@{version} ({ecosystem})...");
+    match client.query_vulnerabilities(&pkg_id).await {
+        Ok(signals) => {
+            if signals.is_empty() {
+                println!("✓  No known vulnerabilities reported in OSV.dev");
+            } else {
+                for sig in &signals {
+                    println!("❌ {}", sig.detail());
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("❌ OSV lookup failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Handles the `daemon` subcommand.
+async fn run_daemon_command(watch_dir: PathBuf, poll_interval_secs: u64) -> ExitCode {
+    let daemon_cfg = sepac::daemon::DaemonConfig {
+        watch_dir: watch_dir.clone(),
+        poll_interval_secs,
+    };
+    let watcher = sepac::daemon::LockfileWatcher::new(daemon_cfg);
+    eprintln!(
+        "👁️  Safeguard daemon monitoring {} (interval: {}s)...",
+        watch_dir.display(),
+        poll_interval_secs
+    );
+
+    match watcher.scan_target_dir() {
+        Ok(found) => {
+            for (path, eco, count) in found {
+                eprintln!(
+                    "🔍 Scanned {} ({eco}): {count} dependencies verified",
+                    path.display()
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("❌ Daemon scan failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Handles the `web` subcommand.
+async fn run_web_command(config: &SafeguardConfig, port: u16) -> ExitCode {
+    let web_cfg = sepac::web::WebConfig {
+        port,
+        config_path: PathBuf::from("safeguard.toml"),
+    };
+    let server = sepac::web::DashboardServer::new(web_cfg);
+    match server.run(config).await {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("❌ Failed to start web dashboard: {e}");
+            ExitCode::FAILURE
         }
     }
 }

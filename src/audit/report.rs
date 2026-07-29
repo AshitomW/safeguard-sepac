@@ -12,6 +12,8 @@ pub enum OutputFormat {
     Terminal,
     /// Machine-readable JSON (stable schema).
     Json,
+    /// Standalone HTML report.
+    Html,
 }
 
 /// Formats an audit event for display.
@@ -23,10 +25,14 @@ pub enum OutputFormat {
 /// # JSON format
 /// Emits the `AuditEvent` as a versioned JSON object. The schema version
 /// is a field in every output — never break the schema.
+///
+/// # HTML format
+/// Generates a standalone HTML report with dark mode styles and risk badges.
 pub fn format_report(event: &AuditEvent, format: OutputFormat) -> String {
     match format {
         OutputFormat::Terminal => format_terminal(event),
         OutputFormat::Json => format_json(event),
+        OutputFormat::Html => format_html(event),
     }
 }
 
@@ -115,6 +121,84 @@ fn format_json(event: &AuditEvent) -> String {
         .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialisation failed: {e}\"}}"))
 }
 
+/// Formats the HTML risk report.
+fn format_html(event: &AuditEvent) -> String {
+    let dec_label = decision_label(&event.decision);
+    let badge_color = match &event.decision {
+        Decision::Allow => "#10B981",    // Green
+        Decision::Warn { .. } => "#F59E0B", // Yellow
+        Decision::Block { .. } => "#EF4444", // Red
+        Decision::Critical { .. } => "#8B5CF6", // Purple
+    };
+
+    let mut signals_html = String::new();
+    if event.signals.is_empty() {
+        signals_html.push_str("<p class='clean'>Zero risk signals detected.</p>");
+    } else {
+        signals_html.push_str("<ul class='signal-list'>");
+        for sig in &event.signals {
+            signals_html.push_str(&format!(
+                "<li><span class='signal-label'>{}</span> <span class='signal-detail'>{}</span></li>",
+                sig.label(),
+                sig.detail()
+            ));
+        }
+        signals_html.push_str("</ul>");
+    }
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Safeguard Risk Report — {name}@{version}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0F172A; color: #F8FAFC; margin: 0; padding: 20px; }}
+        .card {{ max-width: 800px; margin: 40px auto; background: #1E293B; border-radius: 12px; padding: 32px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #334155; }}
+        .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 20px; }}
+        .title {{ font-size: 24px; font-weight: bold; margin: 0; }}
+        .badge {{ background-color: {badge_color}; color: #FFFFFF; font-weight: bold; padding: 6px 16px; border-radius: 20px; text-transform: uppercase; font-size: 14px; }}
+        .metrics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0; }}
+        .metric-box {{ background: #0F172A; padding: 16px; border-radius: 8px; text-align: center; border: 1px solid #334155; }}
+        .metric-value {{ font-size: 20px; font-weight: bold; margin-top: 4px; }}
+        .signal-list {{ list-style: none; padding: 0; }}
+        .signal-list li {{ background: #0F172A; margin-bottom: 8px; padding: 12px 16px; border-radius: 6px; border-left: 4px solid {badge_color}; }}
+        .signal-label {{ font-weight: bold; color: #38BDF8; font-family: monospace; }}
+        .clean {{ color: #10B981; font-weight: bold; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <div>
+                <h1 class="title">{name} <span style="color:#94A3B8;">v{version}</span></h1>
+                <p style="margin:4px 0 0 0; color:#64748B;">Ecosystem: {ecosystem}</p>
+            </div>
+            <div class="badge">{dec_label}</div>
+        </div>
+        <div class="metrics">
+            <div class="metric-box"><div>Risk Score</div><div class="metric-value">{score}</div></div>
+            <div class="metric-box"><div>Trust Mode</div><div class="metric-value">{trust_mode}</div></div>
+            <div class="metric-box"><div>Signals</div><div class="metric-value">{signal_count}</div></div>
+        </div>
+        <h2>Risk Signals</h2>
+        {signals_html}
+    </div>
+</body>
+</html>"#,
+        name = event.package_id.name,
+        version = event.package_id.version,
+        ecosystem = event.package_id.ecosystem,
+        badge_color = badge_color,
+        dec_label = dec_label,
+        score = event.risk_score,
+        trust_mode = event.trust_mode,
+        signal_count = event.signals.len(),
+        signals_html = signals_html
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -197,5 +281,14 @@ mod tests {
         let event = test_event(Decision::Allow, vec![]);
         let json = format_report(&event, OutputFormat::Json);
         assert!(json.contains("\"schema_version\""));
+    }
+
+    #[test]
+    fn html_report_generation() {
+        let event = test_event(Decision::Allow, vec![]);
+        let html = format_report(&event, OutputFormat::Html);
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("evil-pkg"));
+        assert!(html.contains("ALLOW"));
     }
 }

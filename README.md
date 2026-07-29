@@ -1,85 +1,106 @@
-# 🛡️ Safeguard (`sepac`)
+# Safeguard (`sepac`)
 
-> [!WARNING]
-> **EXPERIMENTAL**
->
-> Safeguard (`sepac`) is currently an experiment. Use with caution in real environments.
-
-Safeguard (`sepac`) is a **security utility** designed to protect developers, build servers, and CI/CD pipelines from malicious package dependencies. It intercepts, analyses, and gates package installations based on static analysis, sandboxed execution, and risk scoring.
+Safeguard (`sepac`) is a package-manager-agnostic security system built in Rust. It protects software projects, build servers, and CI/CD pipelines against modern supply-chain attacks including typosquatting, dependency confusion, exposed secrets, import-time code execution, CI evasion, node-gyp script injection, and known CVE vulnerabilities.
 
 ---
 
-## Features
+## Core Capabilities
 
-- **Multi-Phase Risk Analysis**: Combines static code analysis, metadata checks, and sandboxed dynamic execution to identify indicators of compromise (IoCs).
-- **Hardened Sandboxed Installation**: Runs install scripts in an isolated, restricted Linux sandbox using user, network, and mount namespaces alongside custom `seccomp` filters.
-- **Configurable Risk Scoring**: Weighted additive model mapping risk signals to allow, warn, block, or critical decisions.
-- **Append-Only Signed Audit Trail**: Emits replayable JSONL audit events signed via HMAC-SHA256 to prevent tampering.
-- **Native Manifest Scanning**: Validates complete dependency trees using `package.json` or `package-lock.json`.
-- **Lightweight Registry HTTP Proxy**: Automatically intercepts and evaluates incoming package tarballs, responding with `403 Forbidden` if security gates fail.
+### Visual Inspection & Reporting
+- **Dependency Tree Heatmap (`sepac tree`)**: Terminal box-drawing dependency tree renderer with risk heatmap coloring.
+- **Package Version Diff Viewer (`sepac diff`)**: Side-by-side manifest, script, maintainer, and signal comparison across versions.
+- **SBOM Generation (`sepac sbom`)**: Exports SPDX 2.3 JSON and CycloneDX 1.5 JSON compliance manifests.
+- **HTML Security Reports (`sepac analyze --format html`)**: Standalone dark-mode HTML security reports.
+- **Risk & Release Timeline (`sepac timeline`)**: Version release velocity and historical risk score graphs.
+
+### Threat Detection Analysers
+- **Typosquatting Detection (`TyposquatAnalyser`)**: Levenshtein edit distance and homoglyph analysis against popular registry packages.
+- **Dependency Confusion (`DependencyConfusionAnalyser`)**: Version inflation (>100.0.0) and internal scope collision detection.
+- **Secret Scanning (`SecretScanningAnalyser`)**: Scans for AWS keys, GitHub tokens, NPM tokens, Slack webhooks, and private keys.
+- **Import-Time Payload Detection (`ImportTimePayloadAnalyser`)**: Identifies top-level code execution triggered upon module load.
+- **CI Attack Flag Evasion (`CIEnvironmentAnalyser`)**: Detects environment overrides (`CI=false`, `RECON_ONLY`, `NO_TELEMETRY`).
+- **Phantom GYP Injection (`PhantomGypAnalyser`)**: Flags shell injection in `binding.gyp` and `wscript`.
+- **YARA Pattern Matching (`YaraAnalyser`)**: Integrates YARA threat rules against package sources.
+- **Vulnerability Query (`sepac cve`)**: Queries OSV.dev for known CVE vulnerabilities with local caching.
+
+### Ecosystem Support
+- **NPM**: Complete JavaScript package, manifest, and script analysis.
+- **PyPI (`PyPiRegistryAdapter`)**: Python package fetching, metadata, and version history.
+- **Cargo (`CargoRegistryAdapter`)**: Rust crates.io crate fetching, checksum verification, and history.
+- **RubyGems (`RubyGemsRegistryAdapter`)**: RubyGems.org gem fetching and author verification.
+
+### Platform & Integration
+- **Continuous Lockfile Watcher (`sepac daemon`)**: Background service monitoring `package-lock.json`, `Cargo.lock`, `requirements.txt`, and `Gemfile.lock`.
+- **Local Web Dashboard (`sepac web`)**: Embedded local HTTP server providing interactive risk metrics and status.
+- **Alert Dispatcher**: Real-time Slack webhook and generic HTTP POST notifications for blocked decisions.
+- **Policy-as-Code Engine (`PolicyEngine`)**: Evaluates enterprise declarative rules against packages.
+
+### Hardened Sandbox Isolation
+- **Linux Namespace Sandbox (`LinuxSandboxExecutor`)**: Hardened isolation using User, PID, Network (`CLONE_NEWNET`), and Mount (`CLONE_NEWNS`) namespaces alongside `seccomp-bpf` allowlists.
+- **eBPF Syscall Tracer (`EbpfTracer`)**: Captures raw kernel syscall tracepoints during sandboxed script execution.
+- **SQLite Historical Baseline Repository (`SqliteBaselineStore`)**: Tracks package syscall baselines across runs.
+- **Sigstore Verification (`SigstoreVerifier`)**: Verifies Rekor transparency logs and Fulcio certificate chains.
 
 ---
 
-## 🛠️ CLI Subcommands
+## CLI Reference & Examples
 
-Safeguard provides a single unified CLI binary (`sepac`) with subcommands for scanning, analyzing, configuring, proxying, and auditing:
-
-### 1. `sepac analyze <package> <version>`
-
-Evaluates a specific package from the registry and reports a security decision.
-
+### Evaluate Package Risk
 ```bash
+# Evaluate NPM package
 sepac analyze lodash 4.17.21 --ecosystem npm
+
+# Generate HTML report
+sepac analyze requests 2.31.0 -e pypi --format html > report.html
 ```
 
-_Options:_
-
-- `-e, --ecosystem`: Target ecosystem (currently `npm`).
-- `--force <reason>`: Force override a block decision with a justification (logged in the audit trail).
-
-### 2. `sepac scan <path>`
-
-Parses a package manifest or lockfile, evaluates all resolved dependencies, and exits with a non-zero code if policy blocks any package.
-
+### Dependency Tree Heatmap
 ```bash
-sepac scan package-lock.json -e npm
+sepac tree package-lock.json -e npm
 ```
 
-### 3. `sepac proxy`
+### Version Diff Comparison
+```bash
+sepac diff lodash 4.17.20 4.17.21 -e npm
+```
 
-Spawns a local HTTP registry proxy server to automatically intercept, evaluate, and stream or block package downloads.
+### SBOM Generation (SPDX / CycloneDX)
+```bash
+# Generate SPDX 2.3 JSON SBOM
+sepac sbom package-lock.json --format spdx
 
+# Generate CycloneDX 1.5 JSON SBOM
+sepac sbom requirements.txt -e pypi --format cyclonedx
+```
+
+### OSV.dev Vulnerability Lookup
+```bash
+sepac cve express 4.18.2 -e npm
+```
+
+### Continuous Daemon Watcher
+```bash
+sepac daemon --dir . --interval 5
+```
+
+### Web Dashboard Server
+```bash
+sepac web --port 8080
+```
+
+### Lockfile Security Scan
+```bash
+sepac scan Cargo.lock -e cargo
+```
+
+### Registry Proxy Interceptor
 ```bash
 sepac proxy --port 8080 --ecosystem npm
 ```
 
-You can point your package manager registry to the proxy:
-
-```bash
-npm config set registry http://localhost:8080
-```
-
-### 4. `sepac config`
-
-Views or validates the TOML config file.
-
-```bash
-sepac config --validate
-```
-
-### 5. `sepac audit`
-
-Displays the local HMAC-signed audit log.
-
-```bash
-sepac audit --package lodash --last 5
-```
-
 ---
 
-## ⚙️ Configuration (`safeguard.toml`)
-
-All thresholds, weights, sandbox configurations, and policies are loaded from a data file. Example:
+## Configuration (`safeguard.toml`)
 
 ```toml
 trust_mode = "Balanced"
@@ -93,6 +114,14 @@ post-install-added = 5.0
 new-maintainer = 3.0
 binary-blob = 3.0
 obfuscated-code = 4.0
+typosquat = 4.0
+dependency-confusion = 5.0
+secret-exposed = 5.0
+import-time-exec = 4.0
+ci-attack = 4.0
+phantom-gyp = 5.0
+yara-rule-match = 5.0
+known-vulnerability = 4.0
 
 [scoring.thresholds]
 allow_max = 4
@@ -102,90 +131,74 @@ block_max = 14
 [sandbox]
 network_namespace = true
 mount_namespace = true
+user_namespace = true
 seccomp_enabled = true
 syscall_allowlist_path = "/etc/safeguard/syscall_allowlist.toml"
 timeout_secs = 30
 memory_limit_bytes = 268435456  # 256 MiB
 
 [audit]
-log_path = "/var/log/safeguard/audit.jsonl"
-hmac_key_path = "/etc/safeguard/hmac.key"
+log_path = "audit.jsonl"
+hmac_key_path = "hmac.key"
 ```
 
 ---
 
-## Quick Start & Integration
-
-### Wrapper Script
-
-Integrate Safeguard directly with standard `npm install` runs by using the wrapper script:
+## Building & Testing
 
 ```bash
-chmod +x safeguard-npm-install.sh
-./safeguard-npm-install.sh install
-```
+# Execute unit and integration tests
+cargo test
 
-### Development & Testing
-
-Build and run the project locally using Rust:
-
-```bash
 # Check formatting
 cargo fmt --all -- --check
 
-# Check for warnings
+# Check clippy lints
 cargo clippy --all-targets -- -D warnings
-
-# Execute test suite
-cargo test
-```
-
-### Dockerized Staging
-
-Compile and run Safeguard in a container:
-
-```bash
-docker build -t safeguard:latest .
-docker run --rm -it safeguard:latest
 ```
 
 ---
 
-## Extending Safeguard (Adding New Ecosystems)
+## CI/CD Integration (GitHub Actions)
 
-Safeguard is built on top of decoupled boundaries defined by traits. To add a new package ecosystem (e.g., Python/PyPI, Cargo, RubyGems):
+Include `.github/workflows/safeguard-action.yml` in your repository:
 
-### 1. Implement the `PackageSource` Trait
+```yaml
+name:  Risk Scan
+on:
+  pull_request:
+    paths:
+      - '**/package-lock.json'
+      - '**/Cargo.lock'
+      - '**/requirements.txt'
 
-Create a new module in `src/registry/` (e.g. `src/registry/pypi.rs`) and implement the [`PackageSource`](file:///Users/ashi/Desktop/sepac/src/traits/package_source.rs) trait:
-
-- `fetch`: Download and extract tarballs/packages.
-- `history`: Query version history metadata.
-- `checksum`: Query expected checksums.
-- `provenance`: Retrieve build-provenance attestations (if supported).
-
-Register your adapter in [`RegistryAdapterFactory::for_ecosystem`](file:///Users/ashi/Desktop/sepac/src/registry/mod.rs#L25):
-
-```rust
-Ecosystem::PyPi => Box::new(pypi::PyPiRegistryAdapter::new()),
+jobs:
+  safeguard-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: ./target/release/sepac scan package-lock.json -e npm
 ```
 
-### 2. Implement Manifest and Lockfile Parsing
+---
 
-In [`src/manifest/mod.rs`](file:///Users/ashi/Desktop/sepac/src/manifest/mod.rs), add a parsing function for the ecosystem's files (e.g., `requirements.txt`, `poetry.lock`, or `Cargo.lock`):
+## Extending Safeguard
 
-- Parse the file content.
-- Map the list of dependencies into a uniform `Vec<PackageId>`.
-- Hook it into `parse_manifest`:
+### Adding a New Analyser
+Implement the `Analyser` trait in `src/analysis/`:
 
 ```rust
-Ecosystem::Cargo => parse_cargo_manifest(path),
+impl Analyser for CustomScanner {
+    fn analyse(&self, pkg: &PackageArchive) -> Result<Vec<Signal>> {
+        // Inspection logic
+        Ok(vec![])
+    }
+}
 ```
 
-### 3. Add Custom Risk Signals
+Register your scanner in `AnalysisPipeline::default_pipeline()` in `src/analysis/pipeline.rs`.
 
-If the new ecosystem introduces specific threat indicators:
-
-1. Declare the new variant in the `Signal` enum in [`src/types.rs`](file:///Users/ashi/Desktop/sepac/src/types.rs).
-2. Document and assign a weight for it in [`safeguard.toml`](file:///Users/ashi/Desktop/sepac/safeguard.toml) under `[scoring.weights]`.
-3. Add the detection logic inside your custom implementation of [`Analyser`](file:///Users/ashi/Desktop/sepac/src/traits/analyser.rs).
+### Adding a New Ecosystem
+Implement the `PackageSource` trait in `src/registry/` and register the module in `RegistryAdapterFactory::for_ecosystem` in `src/registry/mod.rs`.

@@ -35,6 +35,20 @@ impl AnalysisPipeline {
         self
     }
 
+    /// Creates a pipeline populated with all default built-in static analysers.
+    pub fn default_pipeline() -> Self {
+        Self::new()
+            .add_analyser(Box::new(super::manifest_diff::ManifestDiffAnalyser::new(None)))
+            .add_analyser(Box::new(super::obfuscation::ObfuscationAnalyser::new()))
+            .add_analyser(Box::new(super::typosquat::TyposquatAnalyser::new()))
+            .add_analyser(Box::new(super::dep_confusion::DependencyConfusionAnalyser::new()))
+            .add_analyser(Box::new(super::secrets::SecretScanningAnalyser::new()))
+            .add_analyser(Box::new(super::import_exec::ImportTimePayloadAnalyser::new()))
+            .add_analyser(Box::new(super::ci_attack::CIEnvironmentAnalyser::new()))
+            .add_analyser(Box::new(super::phantom_gyp::PhantomGypAnalyser::new()))
+            .add_analyser(Box::new(super::yara::YaraAnalyser::new()))
+    }
+
     /// Runs all analysers and collects their signals.
     pub fn run(&self, pkg: &PackageArchive) -> Result<Vec<Signal>> {
         let mut all_signals = Vec::new();

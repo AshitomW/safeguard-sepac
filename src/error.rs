@@ -44,6 +44,10 @@ pub enum SafeguardError {
     /// An I/O error not specific to any layer.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A JSON serialization error.
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +107,15 @@ pub enum RegistryError {
         /// Request URL.
         url: String,
         /// Error description.
+        message: String,
+    },
+
+    /// Failed to parse a response from the registry.
+    #[error("parse error from {url}: {message}")]
+    ParseError {
+        /// Request URL.
+        url: String,
+        /// Description of the parse failure.
         message: String,
     },
 }

@@ -1,10 +1,11 @@
-//! Policy engine: scoring, decisions, baselines, and signal aggregation.
-//!
-//! This layer is purely computational — no I/O, no filesystem, no network.
-//! Every component receives its inputs as function arguments and returns
-//! deterministic outputs.
+//! Policy engine: scoring, decisions, baselines, rego policies, and signal aggregation.
 
 pub mod aggregator;
 pub mod baseline;
 pub mod decision;
+pub mod rego;
 pub mod scorer;
+pub mod sqlite_baseline;
+
+pub use rego::{PolicyEngine, PolicyRule};
+pub use sqlite_baseline::SqliteBaselineStore;
